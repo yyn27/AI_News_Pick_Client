@@ -102,7 +102,7 @@ def run_preprocessing(input_path=None, output_path=None, stop_event=None):
     all_data.columns = [str(col).strip() for col in all_data.columns]
     all_data['게시글제목'] = all_data['게시글제목'].apply(preprocess_title)
 
-    exclude_file_path = resource_path("resources/(언진) 수집 제외 도메인 주소_공식 블로그-0709.xlsx")
+    exclude_file_path = resource_path("resources/(언진) 수집 제외 도메인 주소_공식 블로그.xlsx")
     exclude_df = pd.read_excel(exclude_file_path)
     exclude_urls = exclude_df['제외 도메인 주소(블로그)'].dropna().astype(str).tolist()
     filtered_data = all_data[~all_data['게시글URL'].astype(str).apply(
