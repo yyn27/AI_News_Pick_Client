@@ -150,7 +150,7 @@ selector_map = {
     "nocutnews.co.kr": "div#pnlContent", #13 노컷뉴스
     "ytn.co.kr": "div#CmAdContent",  #14 YTN
     "segye.com": "div#article_txt", #15 세계일보
-    "hankookilbo.com": "div.col-main", #16 한국일보
+    #"hankookilbo.com": "div.col-main", #16 한국일보
     "seoul.co.kr": "div.viewContent.body18.color700", #17 서울신문
     "imbc.com": "div.news_txt", #18 MBC
     "cctimes.kr": "div#article-view-content-div", #19 충청타임즈
@@ -180,7 +180,7 @@ selector_map = {
     "sports.khan.co.kr": "div#articleBody",#43 스포츠경향
     "kgnews.co.kr": "div#news_body_area", #44 경기신문
     "nongmin.com": "div.news_txt.ck-content", #45 농민신문
-    "yeongnam.com": "div.article-news-body.font-size03", #46 영남일보
+    "yeongnam.com": "article.article-news-box", #46 영남일보
     "sisain.co.kr": "article.article-veiw-body", #47 시사IN
     "isplus.com": "div#article_body", #48 일간스포츠
     "inews365.com": "div.article", #49 충북일보
@@ -250,8 +250,8 @@ selector_map = {
     "newssc.co.kr": "div#article-view-content-div", #113뉴스서천
     "kidkangwon.co.kr": "div#article-view-content-div", #114어린이강원
     "mygoyang.com": "article.article-veiw-body", #115주간고양신문
-    "soraknews.co.kr": "div#sub_center_contents2", #116주간설악신문
-    #"seoulwire.com": "article.article-veiw-body", #117서울와이어
+    "soraknews.co.kr": "td#ct", #116주간설악신문
+    "seoulwire.com": "article.article-veiw-body", #117서울와이어
 }
 
 def fallback_with_requests(url):
@@ -275,7 +275,7 @@ def fallback_with_requests(url):
                 return content_div.get_text(strip=True)
 
         # fallback: 모든 <p> 태그 결합
-        return "\n".join(p.get_text(strip=True) for p in soup.find_all("p"))
+        return "\n".join(p.get_text(separator="\n", strip=True) for p in soup.find_all("p"))
 
     except Exception as e:
         log(f"⚠️ fallback 요청 중 예외 발생: {e} - url: {url}")
