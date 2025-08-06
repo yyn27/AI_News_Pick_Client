@@ -102,12 +102,20 @@ def run_preprocessing(input_path=None, output_path=None, stop_event=None):
     all_data.columns = [str(col).strip() for col in all_data.columns]
     all_data['게시글제목'] = all_data['게시글제목'].apply(preprocess_title)
 
-    exclude_file_path = resource_path("resources/(언진) 수집 제외 도메인 주소_공식 블로그.xlsx")
-    exclude_df = pd.read_excel(exclude_file_path)
-    exclude_urls = exclude_df['제외 도메인 주소(블로그)'].dropna().astype(str).tolist()
-    filtered_data = all_data[~all_data['게시글URL'].astype(str).apply(
-        lambda url: any(excluded in url for excluded in exclude_urls)
-    )]
+    exclude_ids_path = resource_path("resources/제외 대상 리스트.xlsx")
+    exclude_ids_df = pd.read_excel(exclude_ids_path, header=2)
+    exclude_ids_df.columns = exclude_ids_df.columns.str.strip()
+    exclude_ids = exclude_ids_df['ID'].dropna().astype(str).unique().tolist()
+
+    def extract_blog_id(url):
+        try:
+            from urllib.parse import urlparse, parse_qs
+            return parse_qs(urlparse(str(url)).query).get('blogId', [None])[0]
+        except:
+            return None
+        
+    all_data['blogId'] = all_data['게시글URL'].apply(extract_blog_id)
+    filtered_data = all_data[~all_data['blogId'].isin(exclude_ids)]
 
     log(f"총 행 수: {len(all_data)}")
     log(f"제외된 후 남은 행 수: {len(filtered_data)}")
@@ -151,6 +159,7 @@ def run_preprocessing(input_path=None, output_path=None, stop_event=None):
         log("🛑 사용자 중단 요청 감지, 작업 중단")
         return
 
+    df_final.drop(columns=["blogId"], inplace=True, errors='ignore')
     df_final.to_excel(output_path, index=False)
     log(f"✅ 전처리 완료. 저장됨 → {output_path}")
 

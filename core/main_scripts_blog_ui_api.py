@@ -118,5 +118,4 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     log(f" 0.9 이상: {above_90_count}건")
     log(f" 0 이상: {above_0_count}건")
     log(f"🎉 완료! 저장됨 → {output_path}")
-
-# 不要自动运行 main()，由入口文件调用
+    

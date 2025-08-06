@@ -282,20 +282,30 @@ def fallback_with_requests(url):
         return ""
 
 def calculate_copy_ratio(article, post):
-    def clean(t): return re.sub(r'\s+', ' ', re.sub(r'[^\w\s]', '', t)).strip()
-    article, post = clean(article), clean(post)
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', article) if s.strip()]
-    if not sentences:
+    """
+    A: 블로그 (post)
+    B: 원문기사 (article)
+    복사율: article 중 몇 %가 post에 나오는지(단방향)
+    """
+    def clean(t):
+        if not isinstance(t, str): return ""
+        t = re.sub(r'[^\w\s]', '', t)
+        t = re.sub(r'\s+', ' ', t)
+        return t.strip()
+
+    article_clean = clean(article)
+    post_clean = clean(post)
+
+    if not article_clean or not post_clean:
         return 0.0
-    scores = []
-    for s in sentences:
-        try:
-            v = TfidfVectorizer(tokenizer=okt.morphs).fit([s, post])
-            tfidf = v.transform([s, post])
-            scores.append(cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0])
-        except:
-            continue
-    return round(sum(scores)/len(scores), 3) if scores else 0.0
+
+    matcher = SequenceMatcher(None, post_clean, article_clean)
+    matching_blocks = matcher.get_matching_blocks()
+
+    matched_length = sum(block.size for block in matching_blocks if block.size > 0)
+
+    copy_ratio = matched_length / len(article_clean)
+    return round(copy_ratio, 3)
 
 def is_excluded(url):
     return any(domain in url for domain in excluded_domains)
