@@ -82,6 +82,15 @@ def filter_untrusted_posts(all_data):
     log(f"비신탁사 필터링 완료: 유지 {len(df_filtered)}개 / 삭제 {len(df_removed)}개")
     return df_filtered, df_removed
 
+def filter_by_untrusted_media_names(df):
+    media_file = resource_path("resources/비신탁사 매체명(전처리).xlsx")
+    media_names = pd.read_excel(media_file, header=None).iloc[:, 0].dropna().astype(str).tolist()
+    mask = df["게시글내용"].astype(str).apply(lambda x: not any(name in x for name in media_names))
+    df_filtered = df[mask]
+    df_removed = df[~mask]
+    log(f"비신탁사 매체명 필터링 완료: 유지 {len(df_filtered)}개 / 삭제 {len(df_removed)}개")
+    return df_filtered, df_removed
+
 def filter_empty_image_and_no_da(df_filtered):
     mask = (
         ((~df_filtered["게시글제목"].str.contains("다.", regex=False, na=False)) |
@@ -100,6 +109,7 @@ def filter_empty_image_and_no_da(df_filtered):
 def run_preprocessing(input_path=None, output_path=None, stop_event=None):
     all_data = read_excel_with_hyperlinks(input_path)
     all_data.columns = [str(col).strip() for col in all_data.columns]
+    all_data = all_data.replace(to_replace=r'_x000[D|A]_', value=' ', regex=True)  # ✅ 添加清洗
     all_data['게시글제목'] = all_data['게시글제목'].apply(preprocess_title)
 
     exclude_ids_path = resource_path("resources/제외 대상 리스트.xlsx")
@@ -149,6 +159,16 @@ def run_preprocessing(input_path=None, output_path=None, stop_event=None):
         log("🛑 사용자 중단 요청 감지, 작업 중단")
         return
     
+    df_filtered, _ = filter_by_untrusted_media_names(df_filtered)
+    if df_filtered.empty:
+        log("⚠️ 비신탁사 매체명 필터링 결과: 남은 행이 없습니다. 전처리를 중단합니다.")
+        df_filtered.head(0).to_excel(output_path, index=False)
+        log(f"✅ 전처리 완료. 저장됨 → {output_path}")
+        return
+    if stop_event and stop_event.is_set():
+        log("🛑 사용자 중단 요청 감지, 작업 중단")
+        return
+
     df_final, _ = filter_empty_image_and_no_da(df_filtered)
     if df_final.empty:
         log("⚠️ 텍스트 필터링 결과: 남은 행이 없습니다. 전처리를 중단합니다.")
