@@ -230,7 +230,7 @@ selector_map = {
     "kidshankook.kr": "article.article-veiw-body", #93 소년한국일보
     "journalist.or.kr": "div#news_body_area", #94 기자협회보
     "jeollailbo.com": "article.article-veiw-body", #95 전라일보
-    "jemin.com": "article.article-veiw-body", #96 제민일보
+    "jemin.com": "div.article-body", #96 제민일보
     "kukinews.com": "div#articleContent", #97 쿠키뉴스
     "ekn.kr": "div#news_body_area_contents", #98 에너지경제
     "pttimes.com": "article.article-veiw-body", #99 평택시민신문
@@ -252,7 +252,27 @@ selector_map = {
     "mygoyang.com": "article.article-veiw-body", #115주간고양신문
     "soraknews.co.kr": "td#ct", #116주간설악신문
     "seoulwire.com": "article.article-veiw-body", #117서울와이어
+
+     "news.mtn.co.kr": "div.css-x1j506"
 }
+
+def _normalize_domain(netloc: str) -> str:
+    d = netloc.lower()
+    return d[4:] if d.startswith("www.") else d
+
+def _pick_selector(netloc: str, selector_map: dict):
+    
+    if netloc in selector_map:
+        return selector_map[netloc]
+    
+    nd = _normalize_domain(netloc)
+    if nd in selector_map:
+        return selector_map[nd]
+    
+    for key in selector_map:
+        if nd.endswith(key):
+            return selector_map[key]
+    return None
 
 def fallback_with_requests(url):
     try:
@@ -264,7 +284,7 @@ def fallback_with_requests(url):
 
         # 도메인 기반 selector 선택
         domain = urlparse(url).netloc
-        selector = selector_map.get(domain)
+        selector =  _pick_selector(domain, selector_map)
 
         # selector로 본문 추출
         if selector:
