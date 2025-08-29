@@ -7,7 +7,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.core_utils_ui_api import (
     clean_text, extract_first_sentences, generate_search_queries,
-    search_naver_news_api, calculate_copy_ratio, log
+    search_naver_news_api, calculate_copy_ratio, log, calculate_sequence_matcher_ratio
 )
 
 import sys
@@ -39,7 +39,7 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         search_results = search_naver_news_api(queries, index, client_id, client_secret)
         if not search_results:
             log("❌ 관련 뉴스 없음", index)
-            return index, "", 0.0
+            return index, "", 0.0, "", 0.0
         
         # 检查中断
         if stop_event_flag:
@@ -48,6 +48,7 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
 
         best = max(search_results, key=lambda x: calculate_copy_ratio(x["body"], title + " " + content))
         score = calculate_copy_ratio(best["body"], title + " " + content)
+        sequence_score = calculate_sequence_matcher_ratio(best["body"], content)  # 计算SequenceMatcher相似度
 
         if score >= 0.0:
             safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:50]
@@ -56,14 +57,14 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
                 f.write(f"[URL] {best['link']}\n\n{best['body']}")
             log(f"📝 저장 완료 → {filename} (복사율: {score})", index)
             hyperlink = f'=HYPERLINK("{best["link"]}")'
-            return index, hyperlink, score
+            return index, hyperlink, score, best["body"], sequence_score
         else:
             log(f"⚠️ 복사율 낮음 (복사율: {score})", index)
-            return index, "", 0.0
+            return index, "", 0.0, "", 0.0
 
     except Exception as e:
         log(f"❌ 에러 발생: {e}", index)
-        return index, "", 0.0
+        return index, "", 0.0, "", 0.0
 
 def main(input_path, output_path, client_id, client_secret, stop_event=None):
     output_dir = os.path.splitext(output_path)[0] + "_본문"
@@ -75,6 +76,8 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
 
     df["원본기사"] = ""
     df["복사율"] = 0.0
+    df["원문내용"] = ""   # 新增列
+    df["SequenceMatcher유사도"] = 0.0  # 新增列
 
     def get_stop_flag():
         return stop_event.is_set() if stop_event else False
@@ -90,9 +93,11 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
                     executor.shutdown(cancel_futures=True)
                     break
                 try:
-                    index, link, score = future.result()
+                    index, link, score, body, sequence_score = future.result()
                     df.at[index, "원본기사"] = link
                     df.at[index, "복사율"] = score
+                    df.at[index, "원문내용"] = body  # 存储原文内容
+                    df.at[index, "SequenceMatcher유사도"] = sequence_score  # 存储相似度
                 except Exception as e:
                     log(f"❌ 결과 처리 오류: {e}")
         except Exception as e:

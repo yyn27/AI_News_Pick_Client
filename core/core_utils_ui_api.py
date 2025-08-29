@@ -230,7 +230,7 @@ selector_map = {
     "kidshankook.kr": "article.article-veiw-body", #93 소년한국일보
     "journalist.or.kr": "div#news_body_area", #94 기자협회보
     "jeollailbo.com": "article.article-veiw-body", #95 전라일보
-    "jemin.com": "div.article-body", #96 제민일보
+    #"jemin.com": "article.article-veiw-body", #96 제민일보
     "kukinews.com": "div#articleContent", #97 쿠키뉴스
     "ekn.kr": "div#news_body_area_contents", #98 에너지경제
     "pttimes.com": "article.article-veiw-body", #99 평택시민신문
@@ -253,7 +253,7 @@ selector_map = {
     "soraknews.co.kr": "td#ct", #116주간설악신문
     "seoulwire.com": "article.article-veiw-body", #117서울와이어
 
-     "news.mtn.co.kr": "div.css-x1j506"
+    "news.mtn.co.kr": "div.css-x1j506"
 }
 
 def _normalize_domain(netloc: str) -> str:
@@ -280,7 +280,11 @@ def fallback_with_requests(url):
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code != 200:
             return ""
-        soup = BeautifulSoup(res.text, "html.parser")
+        if "kookje.co.kr" in url:
+            res.encoding = "euc-kr"
+        else:
+            res.encoding = res.apparent_encoding
+        soup = BeautifulSoup(res.content, "html.parser")
 
         # 도메인 기반 selector 선택
         domain = urlparse(url).netloc
@@ -302,6 +306,22 @@ def fallback_with_requests(url):
         return ""
 
 def calculate_copy_ratio(article, post):
+    def clean(t): return re.sub(r'\s+', ' ', re.sub(r'[^\w\s]', '', t)).strip()
+    article, post = clean(article), clean(post)
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', article) if s.strip()]
+    if not sentences:
+        return 0.0
+    scores = []
+    for s in sentences:
+        try:
+            v = TfidfVectorizer(tokenizer=okt.morphs).fit([s, post])
+            tfidf = v.transform([s, post])
+            scores.append(cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0])
+        except:
+            continue
+    return round(sum(scores)/len(scores), 3) if scores else 0.0
+
+def calculate_sequence_matcher_ratio(article, post):
     """
     A: 블로그 (post)
     B: 원문기사 (article)
