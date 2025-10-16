@@ -49,7 +49,7 @@ okt = Okt()
 excluded_domains_file = resource_path("resources/수집 제외 도메인 주소.xlsx")
 excluded_domains = pd.read_excel(excluded_domains_file)["제외 도메인 주소"].dropna().tolist()
 
-def clean_text(text):
+def clean_text(text, preserve_newline=False):
     if not isinstance(text, str):
         text = str(text)
     if text.strip().lower() == 'nan':
@@ -64,7 +64,13 @@ def clean_text(text):
     text = re.sub(r"[!?~\.,\-#]{2,}", "", text)
     text = re.sub(r"&[a-z]+;|&#\d+;", "", text)
     text = re.sub(r"[\\\xa0\u200b\u3000\u200c_x000D_]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    if preserve_newline:
+        # 保留换行，只合并多余空白
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)  # 连续3个以上换行变成2个
+        return text.strip()
+    else:
+        return re.sub(r"\s+", " ", text).strip()
 
 def extract_keywords(text, num_keywords=5):
     nouns = okt.nouns(text)
@@ -282,9 +288,14 @@ def fallback_with_requests(url):
             return ""
         if "kookje.co.kr" in url:
             res.encoding = "euc-kr"
-        else:
+        elif res.apparent_encoding:
             res.encoding = res.apparent_encoding
-        soup = BeautifulSoup(res.content, "html.parser")
+        try:
+            # 优先用res.text（如果编码已知或推断出来）
+            soup = BeautifulSoup(res.text, "html.parser")
+        except Exception:
+            # 如果解码失败，fallback到res.content
+            soup = BeautifulSoup(res.content, "html.parser")
 
         # 도메인 기반 selector 선택
         domain = urlparse(url).netloc
@@ -296,7 +307,8 @@ def fallback_with_requests(url):
             if content_div:
                 for tag in content_div.select("script, style, iframe"):
                     tag.decompose()
-                return content_div.get_text(strip=True)
+                # 关键：保留网页中的换行和段落
+                return content_div.get_text(separator="\n", strip=True)
 
         # fallback: 모든 <p> 태그 결합
         return "\n".join(p.get_text(separator="\n", strip=True) for p in soup.find_all("p"))
@@ -397,7 +409,8 @@ def search_naver_news_api(queries, index, client_id, client_secret):
                 seen_links.add(link)
                 body = fallback_with_requests(link)
                 if body and len(body) > 300:
-                    results.append({"title": title, "link": link, "body": clean_text(body)})
+                    # 关键：正文内容保留换行
+                    results.append({"title": title, "link": link, "body": clean_text(body, preserve_newline=True)})
 
         except Exception as e:
             log(f"❌ API 요청 중 예외 발생: {e} - query: {q}", index)

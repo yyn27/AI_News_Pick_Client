@@ -50,14 +50,17 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         score = calculate_copy_ratio(best["body"], title + " " + content)
         sequence_score = calculate_sequence_matcher_ratio(best["body"], content)  # 计算SequenceMatcher相似度
 
+        # 保留换行的正文
+        body_with_newline = best["body"]
+
         if score >= 0.0:
             safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:50]
             filename = os.path.join(output_dir, f"{index+1:03d}_{safe_title}.txt")
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(f"[URL] {best['link']}\n\n{best['body']}")
+            with open(filename, "w", encoding="utf-8", errors="replace") as f:
+                f.write(f"[URL] {best['link']}\n\n{body_with_newline}")
             log(f"📝 저장 완료 → {filename} (복사율: {score})", index)
             hyperlink = f'=HYPERLINK("{best["link"]}")'
-            return index, hyperlink, score, best["body"], sequence_score
+            return index, hyperlink, score, body_with_newline, sequence_score
         else:
             log(f"⚠️ 복사율 낮음 (복사율: {score})", index)
             return index, "", 0.0, "", 0.0
@@ -65,6 +68,13 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
     except Exception as e:
         log(f"❌ 에러 발생: {e}", index)
         return index, "", 0.0, "", 0.0
+    
+def clean_surrogates(val):
+    """非法 surrogate 제거"""
+    if isinstance(val, str):
+        # U+D800 - U+DFFF 范围字符去掉
+        return re.sub(r'[\ud800-\udfff]', '', val)
+    return val
 
 def main(input_path, output_path, client_id, client_secret, stop_event=None):
     output_dir = os.path.splitext(output_path)[0] + "_본문"
@@ -115,6 +125,10 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
         {"순번": "0 이상", "검색": f"{above_0_count}건"},
     ])
     df = pd.concat([df, stats_rows], ignore_index=True)
+
+    # surrogate 문자 제거
+    df = df.applymap(clean_surrogates)
+    
     df.to_excel(output_path, index=False)
 
     log("📊 통계 요약")
@@ -123,4 +137,3 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     log(f" 0.9 이상: {above_90_count}건")
     log(f" 0 이상: {above_0_count}건")
     log(f"🎉 완료! 저장됨 → {output_path}")
-    

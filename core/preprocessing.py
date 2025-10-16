@@ -112,7 +112,7 @@ def run_preprocessing(input_path=None, output_path=None, stop_event=None):
     all_data = all_data.replace(to_replace=r'_x000[D|A]_', value=' ', regex=True)  # ✅ 添加清洗
     all_data['게시글제목'] = all_data['게시글제목'].apply(preprocess_title)
 
-    exclude_ids_path = resource_path("resources/제외 대상 리스트.xlsx")
+    exclude_ids_path = resource_path("resources/제외 대상 리스트_0925.xlsx")
     exclude_ids_df = pd.read_excel(exclude_ids_path, header=2)
     exclude_ids_df.columns = exclude_ids_df.columns.str.strip()
     exclude_ids = exclude_ids_df['ID'].dropna().astype(str).unique().tolist()
