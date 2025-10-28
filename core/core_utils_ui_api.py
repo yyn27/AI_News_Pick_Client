@@ -2,6 +2,7 @@
 
 import os
 import re
+import html
 import time
 import requests
 import logging
@@ -52,18 +53,29 @@ excluded_domains = pd.read_excel(excluded_domains_file)["제외 도메인 주소
 def clean_text(text, preserve_newline=False):
     if not isinstance(text, str):
         text = str(text)
+
+    # ✅ 第一步：把 HTML 实体解码成真实字符（例如 &#48; -> '0', &nbsp; -> ' ')
+    text = html.unescape(text)
+
     if text.strip().lower() == 'nan':
         return ""
     patterns = [
         r"Video Player", r"Video 태그를 지원하지 않는 브라우저입니다\.",
-        r"\d{2}:\d{2}", r"[01]\.\d{2}x", r"출처:\s?[^\n]+", r"/\s?\d+\.?\d*"
+        r"\d{2}:\d{2}",
+        r"[01]\.\d{2}x", 
+        r"출처:\s?[^\n]+", 
+        r"/\s?\d+\.?\d*"
     ]
     for p in patterns:
         text = re.sub(p, "", text)
+
     text = re.sub(r"[ㅋㅎㅠㅜ]+", "", text)
     text = re.sub(r"[!?~\.,\-#]{2,}", "", text)
-    text = re.sub(r"&[a-z]+;|&#\d+;", "", text)
-    text = re.sub(r"[\\\xa0\u200b\u3000\u200c_x000D_]", " ", text)
+    #删除这行，不要再把实体模式直接清空
+    #text = re.sub(r"&[a-z]+;|&#\d+;", "", text) 
+    #text = re.sub(r"[\\\xa0\u200b\u3000\u200c_x000D_]", " ", text)
+    #正确地处理不可见字符 / 特殊空白
+    text = re.sub(r"(\\|\xa0|\u200b|\u3000|\u200c|_x000D_)", " ", text)
     if preserve_newline:
         # 保留换行，只合并多余空白
         text = re.sub(r"[ \t]+", " ", text)
@@ -94,6 +106,9 @@ def generate_search_queries(title, first, second, last, press):
     second_clean = truncate(clean_text(second))
     last_clean = truncate(clean_text(last))
     keywords = truncate(extract_keywords(title_clean))
+    # 匹配到文本最多的依次是：title > first_clean > keywords+press > last_clean > second_clean
+    # second_clean几乎没有用到
+    # last_clean也很少用到，并且大多是结尾的一些版权信息。
     queries = list(set(filter(None, [
         title_clean,
         keywords + " " + press,
@@ -220,7 +235,7 @@ selector_map = {
     "iusm.co.kr": "article.article-veiw-body", #77 울산매일
     "dnews.co.kr": "div.text", #78 e대한경제
     "hellodd.com": "article.article-veiw-body", #79 헬로디디
-    "ilyo.co.kr": "div.contentView.ctl-font-ty2.editorType2", #80 일요신문
+    "ilyo.co.kr": "div.mainSection", #80 일요신문
     "ccdailynews.com": "article.article-veiw-body", #81 충청일보
     "djtimes.co.kr": "article.article-veiw-body", #82 당진시대
     "hkbs.co.kr": "article.article-veiw-body", #83 환경일보
@@ -372,7 +387,9 @@ def search_naver_news_api(queries, index, client_id, client_secret):
 
     for q in queries:
         try:
-            url = f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=5&sort=sim"
+            # display max = 100,
+            # naver一个页面上最多二十条，比较了5，10，20，20ok
+            url = f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=20&sort=sim"
             res = requests.get(url, headers=headers)
             time.sleep(0.25)  # API 요청 간 딜레이
 
