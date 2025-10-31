@@ -22,29 +22,34 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         # 检查中断
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
-            return index, "", 0.0
+            return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
+        
+        content_raw = str(row_dict.get("게시글내용", ""))
+        # ① 提取用：保留换行
+        content_for_extract = clean_text(content_raw, preserve_newline=True)
         
         title = clean_text(str(row_dict.get("게시글제목", "")))
         content = clean_text(str(row_dict.get("게시글내용", "")))
         press = clean_text(str(row_dict.get("검색어", "")))
-        first, second, last = extract_first_sentences(content)
+        # 重要：用保留换行的文本来切段
+        first, second, last = extract_first_sentences(content_for_extract)
         queries = generate_search_queries(title, first, second, last, press)
         log(f"🔍 검색어: {queries}", index)
 
         # 检查中断
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
-            return index, "", 0.0
+            return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
 
         search_results = search_naver_news_api(queries, index, client_id, client_secret)
         if not search_results:
             log("❌ 관련 뉴스 없음", index)
-            return index, "", 0.0, "", 0.0
+            return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
         
         # 检查中断
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
-            return index, "", 0.0
+            return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
 
         best = max(search_results, key=lambda x: calculate_copy_ratio(x["body"], title + " " + content))
         score = calculate_copy_ratio(best["body"], title + " " + content)
@@ -52,22 +57,24 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
 
         # 保留换行的正文
         body_with_newline = best["body"]
+        query_label = best.get("query_label", "")
+        query_text  = best.get("query_text", "")
 
         if score >= 0.0:
             safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:50]
             filename = os.path.join(output_dir, f"{index+1:03d}_{safe_title}.txt")
             with open(filename, "w", encoding="utf-8", errors="replace") as f:
                 f.write(f"[URL] {best['link']}\n\n{body_with_newline}")
-            log(f"📝 저장 완료 → {filename} (복사율: {score})", index)
+            log(f"📝 저장 완료 → {filename} (복사율: {score}, 쿼리: {query_label})", index)
             hyperlink = f'=HYPERLINK("{best["link"]}")'
-            return index, hyperlink, score, body_with_newline, sequence_score
+            return index, hyperlink, score, body_with_newline, sequence_score, query_label, query_text
         else:
             log(f"⚠️ 복사율 낮음 (복사율: {score})", index)
-            return index, "", 0.0, "", 0.0
+            return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
 
     except Exception as e:
         log(f"❌ 에러 발생: {e}", index)
-        return index, "", 0.0, "", 0.0
+        return index, "", 0.0, "", 0.0, "", ""  # 多返回 query_text
     
 def clean_surrogates(val):
     """非法 surrogate 제거"""
@@ -88,6 +95,8 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     df["복사율"] = 0.0
     df["원문내용"] = ""   # 新增列
     df["SequenceMatcher유사도"] = 0.0  # 新增列
+    df["query"] = ""
+    df["query_text"] = ""
 
     def get_stop_flag():
         return stop_event.is_set() if stop_event else False
@@ -103,11 +112,13 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
                     executor.shutdown(cancel_futures=True)
                     break
                 try:
-                    index, link, score, body, sequence_score = future.result()
+                    index, link, score, body, sequence_score, query_label, query_text = future.result()
                     df.at[index, "원본기사"] = link
                     df.at[index, "복사율"] = score
                     df.at[index, "원문내용"] = body  # 存储原文内容
                     df.at[index, "SequenceMatcher유사도"] = sequence_score  # 存储相似度
+                    df.at[index, "query"] = query_label
+                    df.at[index, "query_text"] = query_text
                 except Exception as e:
                     log(f"❌ 결과 처리 오류: {e}")
         except Exception as e:
@@ -137,3 +148,4 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     log(f" 0.9 이상: {above_90_count}건")
     log(f" 0 이상: {above_0_count}건")
     log(f"🎉 완료! 저장됨 → {output_path}")
+    

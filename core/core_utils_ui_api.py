@@ -89,12 +89,24 @@ def extract_keywords(text, num_keywords=5):
     return " ".join(nouns[:num_keywords])
 
 def extract_first_sentences(text):
-    paras = re.split(r'\n{2,}', text.strip())
-    get_first = lambda p: re.split(r'(?<=[.!?])(?=\s|[가-힣])', p.strip())[0] if p else ""
-    get_last = lambda p: re.split(r'(?<=[.!?])(?=\s|[가-힣])', p.strip())[-1].strip() if p else ""
-    first = get_first(paras[0]) if len(paras) > 0 else ""
-    second = get_first(paras[1]) if len(paras) > 1 else ""
-    last = get_last(paras[-1]) if len(paras) > 0 else ""
+    s = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+    # ① 优先：空行分段（一个或多个空白行）
+    paras = [p.strip() for p in re.split(r'\n\s*\n+', s) if p.strip()]
+    # ② 退化：如果只有一段，改用“任意换行”再试一次
+    if len(paras) < 2:
+        paras = [p.strip() for p in re.split(r'\n+', s) if p.strip()]
+
+    def first_sentence(p: str) -> str:
+        if not p: 
+            return ""
+        parts = re.split(r'(?<=[\.!?。…])["”’\')\]]*\s+', p.strip())
+        return (parts[0] if parts and parts[0].strip() else p).strip()
+
+    first  = first_sentence(paras[0]) if len(paras) > 0 else ""
+    second = first_sentence(paras[1]) if len(paras) > 1 else ""
+    last   = first_sentence(paras[-1]) if len(paras) > 0 else ""
+
     return first, second, last
 
 MAX_QUERY_LENGTH = 100
@@ -108,15 +120,25 @@ def generate_search_queries(title, first, second, last, press):
     keywords = truncate(extract_keywords(title_clean))
     # 匹配到文本最多的依次是：title > first_clean > keywords+press > last_clean > second_clean
     # second_clean几乎没有用到
-    # last_clean也很少用到，并且大多是结尾的一些版权信息。
-    queries = list(set(filter(None, [
-        title_clean,
-        keywords + " " + press,
-        first_clean,
-        second_clean,
-        last_clean
-    ])))
-    return queries[:5]
+    # last_clean大多是结尾的一些版权信息或带“#”的话题标签
+    # (label, query) 원본 순서 유지 + 중복 제거
+    candidates = [
+        ("title_clean",        title_clean),
+        ("keywords+press",     f"{keywords} {press}".strip()),
+        ("first_clean",        first_clean),
+        ("second_clean",       second_clean),
+        ("last_clean",         last_clean),
+    ]
+
+    seen = set()
+    ordered_unique = []
+    for label, q in candidates:
+        if q and q not in seen:
+            ordered_unique.append((label, q))
+            seen.add(q)
+
+    # 최대 5개 반환
+    return ordered_unique[:5]
 
 def load_trusted_oids():
     def load_oid_from_excel(filename):
@@ -383,32 +405,34 @@ def search_naver_news_api(queries, index, client_id, client_secret):
         "X-Naver-Client-Secret": client_secret
     }
     results = []
-    seen_links = set()
+    # 仅用于避免重复抓取正文；但允许“同一 link 在不同 label 下各保留一条结果”
+    body_cache = {}  # link -> body(str) or ""
+    added_labels_by_link = {}  # link -> set(labels already added into results)
 
-    for q in queries:
+    for label, q in queries:
         try:
             # display max = 100,
-            # naver一个页面上最多二十条，比较了5，10，20，20ok
+            # naver一个页面上最多二十条，比较了5，10，20
             url = f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=20&sort=sim"
             res = requests.get(url, headers=headers)
             time.sleep(0.25)  # API 요청 간 딜레이
 
             if res.status_code != 200:
-                log(f"❌ API 응답 오류 [{res.status_code}] - query: {q}", index)
+                log(f"❌ API 응답 오류 [{res.status_code}] - query({label}): {q}", index)
                 log(f"↪ 응답 내용: {res.text}", index)
                 continue
 
             try:
                 data = res.json()
             except Exception as e:
-                log(f"❌ JSON 파싱 실패: {e} - query: {q}", index)
+                log(f"❌ JSON 파싱 실패: {e} - query({label}): {q}", index)
                 log(f"↪ 원본 응답: {res.text[:300]}...", index)
                 continue
 
             for item in data.get("items", []):
                 link = item.get("link")
                 title = item.get("title")
-                if not link or link in seen_links or is_excluded(link):
+                if not link or is_excluded(link):
                     continue
 
                 if "naver.com" in link:
@@ -423,13 +447,31 @@ def search_naver_news_api(queries, index, client_id, client_secret):
                     if "entertain.naver.com" in link and oid not in trusted_entertain_oids:
                         continue
 
-                seen_links.add(link)
-                body = fallback_with_requests(link)
-                if body and len(body) > 300:
-                    # 关键：正文内容保留换行
-                    results.append({"title": title, "link": link, "body": clean_text(body, preserve_newline=True)})
+                # 抓正文：只对首次见到的 link 抓取网络；否则复用缓存
+                if link not in body_cache:
+                    body = fallback_with_requests(link)
+                    body_cache[link] = body or ""
+                else:
+                    body = body_cache[link]
+                
+                if not body or len(body) <= 300:
+                    continue
+
+                if link not in added_labels_by_link:
+                    added_labels_by_link[link] = set()
+
+                # 关键：同一 link 在不同 label 下，可以各自添加一条记录
+                if label not in added_labels_by_link[link]:
+                    results.append({
+                        "title": title,
+                        "link": link,
+                        "body": clean_text(body, preserve_newline=True),
+                        "query_label": label,      # 保留 label
+                        "query_text": q,           # 新增：保留原始 query 文本（用于核对）
+                    })
+                    added_labels_by_link[link].add(label)
 
         except Exception as e:
-            log(f"❌ API 요청 중 예외 발생: {e} - query: {q}", index)
+            log(f"❌ API 요청 중 예외 발생: {e} - query({label}): {q}", index)
 
     return results
