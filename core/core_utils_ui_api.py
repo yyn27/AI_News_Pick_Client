@@ -223,7 +223,7 @@ selector_map = {
     "sports.khan.co.kr": "div#articleBody",#43 스포츠경향
     "kgnews.co.kr": "div#news_body_area", #44 경기신문
     "nongmin.com": "div.news_txt.ck-content", #45 농민신문
-    "yeongnam.com": "article.article-news-box", #46 영남일보
+    "yeongnam.com": "div.article-news-body", #46 영남일보
     "sisain.co.kr": "article.article-veiw-body", #47 시사IN
     "isplus.com": "div#article_body", #48 일간스포츠
     "inews365.com": "div.article", #49 충북일보
@@ -296,7 +296,8 @@ selector_map = {
     "soraknews.co.kr": "td#ct", #116주간설악신문
     "seoulwire.com": "article.article-veiw-body", #117서울와이어
 
-    "news.mtn.co.kr": "div.css-x1j506"
+    "news.mtn.co.kr": "div.css-x1j506",
+    "newstown.co.kr": "div#_article",
 }
 
 def _normalize_domain(netloc: str) -> str:
