@@ -50,6 +50,27 @@ okt = Okt()
 excluded_domains_file = resource_path("resources/수집 제외 도메인 주소.xlsx")
 excluded_domains = pd.read_excel(excluded_domains_file)["제외 도메인 주소"].dropna().tolist()
 
+# === NEW: 도메인 화이트리스트 불러오기 ===
+try:
+    trusted_domains_file = resource_path("resources/매체사_도메인_정보.xlsx")
+    _td_df = pd.read_excel(trusted_domains_file)
+    if "도메인" in _td_df.columns:
+        trusted_domains = (
+            _td_df["도메인"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .tolist()
+        )
+    else:
+        log(f"⚠️ 매체사_도메인_정보.xlsx 에 '도메인' 컬럼 없음, 실제 컬럼: {list(_td_df.columns)}")
+        trusted_domains = []
+except Exception as e:
+    log(f"⚠️ 도메인 화이트리스트 로딩 실패: {e}")
+    trusted_domains = []
+# === END NEW ===
+
 def clean_text(text, preserve_newline=False):
     if not isinstance(text, str):
         text = str(text)
@@ -119,7 +140,6 @@ def generate_search_queries(title, first, second, last, press):
     last_clean = truncate(clean_text(last))
     keywords = truncate(extract_keywords(title_clean))
     # 匹配到文本最多的依次是：title > first_clean > keywords+press > last_clean > second_clean
-    # second_clean几乎没有用到
     # last_clean大多是结尾的一些版权信息或带“#”的话题标签
     # (label, query) 원본 순서 유지 + 중복 제거
     candidates = [
@@ -172,11 +192,50 @@ def extract_oid_from_naver_url(link):
         return match.group(1)
     return None
 
+# === NEW: 블로그 본문에서 URL 추출 + 화이트리스트/신탁 OID 판단 ===
+def extract_urls_from_text(text: str):
+    """본문에서 URL 추출 (괄호/따옴표 등 꼬리 구두점 제거)"""
+    if not isinstance(text, str) or not text.strip():
+        return []
+    pattern = r'(https?://[^\s)>\]\"\'}]+)'
+    urls = re.findall(pattern, text)
+    return [u.rstrip(').,"\']>') for u in urls]
+
+def is_whitelisted_domain(url: str) -> bool:
+    """매체사 도메인 화이트리스트 여부"""
+    # 정확 일치 + 서브도메인만 허용 (ex: etnews.com허용, silvernetnews.com불허용)
+    try:
+        netloc = _normalize_domain(urlparse(url).netloc)
+        return any(
+            netloc == d or netloc.endswith("." + d)
+            for d in trusted_domains
+        )
+    except Exception:
+        return False
+
+def is_trusted_oid(url: str) -> bool:
+    """네이버 신탁 언론 OID 여부"""
+    try:
+        if "naver.com" not in url:
+            return False
+        oid = extract_oid_from_naver_url(url)
+        if not oid:
+            return False
+        return (
+            oid in trusted_news_oids or
+            oid in trusted_sports_oids or
+            oid in trusted_entertain_oids
+        )
+    except Exception:
+        return False
+# === END NEW ===
+
 # ==== 뉴스 본문 selector 맵핑 ====
 selector_map = {
     "n.news.naver.com": "article#dic_area",
     "m.sports.naver.com": "div._article_content",
     "m.entertain.naver.com": "article#comp_news_article div._article_content",
+    "m.edaily.co.kr": "div.article_body", # 이데일리 모바일
 
     "edaily.co.kr": "div.news_body", # 1 이데일리
     "mt.co.kr": "div#textBody", # 2 머니투데이
@@ -257,7 +316,7 @@ selector_map = {
     "iusm.co.kr": "article.article-veiw-body", #77 울산매일
     "dnews.co.kr": "div.text", #78 e대한경제
     "hellodd.com": "article.article-veiw-body", #79 헬로디디
-    "ilyo.co.kr": "div.mainSection", #80 일요신문
+    "ilyo.co.kr": "div.contentView", #80 일요신문
     "ccdailynews.com": "article.article-veiw-body", #81 충청일보
     "djtimes.co.kr": "article.article-veiw-body", #82 당진시대
     "hkbs.co.kr": "article.article-veiw-body", #83 환경일보
@@ -273,7 +332,7 @@ selector_map = {
     "kidshankook.kr": "article.article-veiw-body", #93 소년한국일보
     "journalist.or.kr": "div#news_body_area", #94 기자협회보
     "jeollailbo.com": "article.article-veiw-body", #95 전라일보
-    #"jemin.com": "article.article-veiw-body", #96 제민일보
+    "jemin.com": "article.article-veiw-body", #96 제민일보
     "kukinews.com": "div#articleContent", #97 쿠키뉴스
     "ekn.kr": "div#news_body_area_contents", #98 에너지경제
     "pttimes.com": "article.article-veiw-body", #99 평택시민신문
@@ -281,7 +340,7 @@ selector_map = {
     "koreatimes.com": "div#print_arti", #101코리아타임스
     "okinews.com": "div#article-view-content-div", #102옥천신문
     "igimpo.com": "article.article-veiw-body", #103김포신문
-    #"gwangnam.co.kr": "div#content", #104광남일보
+    "gwangnam.co.kr": "div#content", #104광남일보
     "pdjournal.com": "article.article-veiw-body", #105PD저널
     "pennmike.com": "article.article-veiw-body", #106펜앤드마이크
     "hsnews.co.kr": "article.article-veiw-body", #107홍성신문
@@ -296,8 +355,6 @@ selector_map = {
     "soraknews.co.kr": "td#ct", #116주간설악신문
     "seoulwire.com": "article.article-veiw-body", #117서울와이어
 
-    "news.mtn.co.kr": "div.css-x1j506",
-    "newstown.co.kr": "div#_article",
 }
 
 def _normalize_domain(netloc: str) -> str:
@@ -413,8 +470,9 @@ def search_naver_news_api(queries, index, client_id, client_secret):
     for label, q in queries:
         try:
             # display max = 100,
-            # naver一个页面上最多二十条，比较了5，10，20
-            url = f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=20&sort=sim"
+            # naver一个页面上最多二十条，比较了5，10，20，20效果最佳
+            # 후보군15개 from minjeong
+            url = f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(q)}&display=15&sort=sim"
             res = requests.get(url, headers=headers)
             time.sleep(0.25)  # API 요청 간 딜레이
 
@@ -436,6 +494,7 @@ def search_naver_news_api(queries, index, client_id, client_secret):
                 if not link or is_excluded(link):
                     continue
 
+                # Naver 도메인 → OID 기반 신탁 필터
                 if "naver.com" in link:
                     oid = extract_oid_from_naver_url(link)
                     if not oid:
@@ -447,6 +506,12 @@ def search_naver_news_api(queries, index, client_id, client_secret):
                         continue
                     if "entertain.naver.com" in link and oid not in trusted_entertain_oids:
                         continue
+                # === NEW: 비-Naver 도메인 → 도메인 화이트리스트 필터 ===
+                else:
+                    if not is_whitelisted_domain(link):
+                        log(f"🚫 비신탁 도메인 제외 : {link}", index)
+                        continue
+                # === END NEW ===
 
                 # 抓正文：只对首次见到的 link 抓取网络；否则复用缓存
                 if link not in body_cache:
