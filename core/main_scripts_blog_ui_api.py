@@ -6,8 +6,8 @@ import pandas as pd
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from core.core_utils_ui_api import (
-    clean_text, extract_first_sentences, generate_search_queries,
-    search_naver_news_api, calculate_copy_ratio, log, calculate_sequence_matcher_ratio,
+    log, clean_text, extract_first_sentences, generate_search_queries,
+    search_naver_news_api, calculate_tfidf_copy_ratio, calculate_sequencematcher_copy_ratio, calculate_sbert_copy_ratio,
     extract_urls_from_text, is_whitelisted_domain, is_trusted_oid, fallback_with_requests,
 )
 
@@ -24,7 +24,7 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
             # 最后一个返回值 delete_row_flag
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
         
         content_raw = str(row_dict.get("게시글내용", ""))
         # ① 提取用：保留换行
@@ -58,25 +58,28 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
                 continue  # 内容过短/抓不到正文，就不当候选
 
             body_clean = clean_text(body, preserve_newline=True)
-            seq_score = calculate_sequence_matcher_ratio(body_clean, content)
-            tfidf_score = calculate_copy_ratio(body_clean, title + " " + content)
+
+            tfidf_score = calculate_tfidf_copy_ratio(body_clean, title + " " + content)
+            seq_score = calculate_sequencematcher_copy_ratio(body_clean, content)
+            sbert_score = calculate_sbert_copy_ratio(body_clean, title + " " + content)
 
             blog_candidates.append({
                 "title": "",
                 "link": blog_url,
                 "body": body_clean,
-                "seq": seq_score,
+                "sbert": sbert_score,
                 "tfidf": tfidf_score,
+                "seq": seq_score,
                 "query_label": "blog_url",       # 标记为来自博客正文URL
                 "query_text": blog_url,
             })
-            log(f"🧷 블로그 URL 후보: {blog_url} (TF-IDF={tfidf_score:.3f}, Seq={seq_score:.3f})", index)
+            log(f"🧷 블로그 URL 후보: {blog_url} (SBERT={sbert_score:.3f}, TF-IDF={tfidf_score:.3f}, Seq={seq_score:.3f})", index)
         # === B 结束 ===
 
         # 再检查中断
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
 
         # C. Naver 뉴스 API 후보 수집 + 打分
         search_results = search_naver_news_api(queries, index, client_id, client_secret)
@@ -84,23 +87,25 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         # Naver 候选为空且没有任何博客候选 → 没找到可信原文，但不删行
         if not search_results and not blog_candidates:
             log("❌ 관련 뉴스 없음 (네이버/블로그 신뢰 후보 모두 없음)", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
         
         if stop_event_flag:
             log("🛑 사용자 중단 요청 감지, 작업 중단", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
 
         enriched = []
         for item in search_results:
             body = item["body"]
-            tfidf_score = calculate_copy_ratio(body, title + " " + content)
-            seq_score = calculate_sequence_matcher_ratio(body, content)
+            tfidf_score = calculate_tfidf_copy_ratio(body, title + " " + content)
+            seq_score = calculate_sequencematcher_copy_ratio(body, content)
+            sbert_score = calculate_sbert_copy_ratio(body, title + " " + content)
             enriched.append({
                 "title": item.get("title", ""),
                 "link": item.get("link", ""),
                 "body": body,
-                "seq": seq_score,
+                "sbert": sbert_score,
                 "tfidf": tfidf_score,
+                "seq": seq_score,
                 "query_label": item.get("query_label", ""),
                 "query_text": item.get("query_text", ""),
             })
@@ -111,7 +116,7 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
 
         if not pool:
             log("❌ 후보 기사 없음 (후보 풀 비어 있음)", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
 
         # E. 只在“可信候选”中选 best（信托 OID 或 白名单域名）
         trusted_only = [
@@ -122,33 +127,35 @@ def find_original_article_api(index, row_dict, total_count, output_dir, stop_eve
         # 连一个可信候选都没有,视作“没找到可信原文”，但不删这条博客
         if not trusted_only:
             log("⚠️ 공식 매체 후보 없음 (비공식 매체만 존재)", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
 
-        # 在可信候选里按 TF-IDF/Seq 排序，选最高的一条
-        trusted_only.sort(key=lambda x: (x.get("tfidf", 0.0), x.get("seq", 0.0)), reverse=True)
+        # 在可信候选里按 sbert/Seq 排序，选最高的一条
+        trusted_only.sort(key=lambda x: (x.get("sbert", 0.0), x.get("seq", 0.0)), reverse=True)
         best = trusted_only[0]
 
-        score = float(best.get("tfidf", 0.0))
-        sequence_score = float(best.get("seq", 0.0))
+        sbert_score = float(best.get("sbert", 0.0))
+        tfidf_score = float(best.get("tfidf", 0.0))
+        seq_score = float(best.get("seq", 0.0))
 
         body_with_newline = best["body"]
         query_label = best.get("query_label", "")
         query_text  = best.get("query_text", "")
 
-        if score >= 0.0:
+        if sbert_score >= 0.0:
             safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:50]
             filename = os.path.join(output_dir, f"{index+1:03d}_{safe_title}.txt")
             with open(filename, "w", encoding="utf-8", errors="replace") as f:
                 f.write(f"[URL] {best['link']}\n\n{body_with_newline}")
-            log(f"📝 저장 완료 → {filename} (복사율: {score}, 쿼리: {query_label})", index)
-            return index, best["link"], score, body_with_newline, sequence_score, query_label, query_text, False
+            #log(f"📝 저장 완료 → {filename} (복사율: {sbert_score}, 쿼리: {query_label})", index)
+            log(f"📝 저장 완료 → {filename} (SBERT={sbert_score:.3f}, TF-IDF={tfidf_score:.3f}, Seq={seq_score:.3f}, 쿼리: {query_label})", index)
+            return index, best["link"], sbert_score, tfidf_score, seq_score, body_with_newline, query_label, query_text, False
         else:
-            log(f"⚠️ 복사율 낮음 (복사율: {score})", index)
-            return index, "", 0.0, "", 0.0, "", "", False
+            log(f"⚠️ 복사율 낮음 (복사율: {sbert_score})", index)
+            return index, "", 0.0, 0.0, 0.0, "", "", "", False
 
     except Exception as e:
         log(f"❌ 에러 발생: {e}", index)
-        return index, "", 0.0, "", 0.0, "", "", False
+        return index, "", 0.0, 0.0, 0.0, "", "", "", False
     
 def clean_surrogates(val):
     """非法 surrogate 제거"""
@@ -166,9 +173,10 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     log(f"📄 전체 게시글 수: {total}개")
 
     df["원문기사 url"] = ""
-    df["복사율"] = 0.0
+    df["SBERT"] = 0.0
+    df["TF-IDF"] = 0.0  # 新增列
+    df["SequenceMatcher"] = 0.0  # 新增列
     df["원문내용"] = ""   # 新增列
-    df["SequenceMatcher유사도"] = 0.0  # 新增列
     df["query"] = ""
     df["query_text"] = ""
 
@@ -187,7 +195,7 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
                     break
                 try:
                     # === NEW: delete_row_flag 处理 ===
-                    index, link, score, body, sequence_score, query_label, query_text, delete_row_flag = future.result()
+                    index, link, sbert_score, tfidf_score, seq_score, body, query_label, query_text, delete_row_flag = future.result()
 
                     if delete_row_flag:
                         if 0 <= index < len(df):
@@ -195,9 +203,10 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
                         continue
 
                     df.at[index, "원문기사 url"] = link
-                    df.at[index, "복사율"] = score
+                    df.at[index, "SBERT"] = sbert_score
+                    df.at[index, "TF-IDF"] = tfidf_score
+                    df.at[index, "SequenceMatcher"] = seq_score  # 存储相似度
                     df.at[index, "원문내용"] = body  # 存储原文内容
-                    df.at[index, "SequenceMatcher유사도"] = sequence_score  # 存储相似度
                     df.at[index, "query"] = query_label
                     df.at[index, "query_text"] = query_text
                 except Exception as e:
@@ -205,9 +214,9 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
         except Exception as e:
             log(f"❌ 프로세스 풀 에러: {e}")
 
-    matched_count = df["복사율"].gt(0).sum()
-    above_90_count = df["복사율"].ge(0.9).sum()
-    above_50_count = df["복사율"].ge(0.5).sum() - above_90_count
+    matched_count = df["SBERT"].gt(0).sum()
+    above_90_count = df["SBERT"].ge(0.9).sum()
+    above_50_count = df["SBERT"].ge(0.5).sum() - above_90_count
     above_0_count = matched_count - above_90_count - above_50_count
 
     stats_rows = pd.DataFrame([
@@ -219,11 +228,12 @@ def main(input_path, output_path, client_id, client_secret, stop_event=None):
     df = pd.concat([df, stats_rows], ignore_index=True)
 
     # surrogate 문자 제거
-    df = df.applymap(clean_surrogates)
+    #df = df.applymap(clean_surrogates)
+    df = df.apply(lambda col: col.map(clean_surrogates))
     
     df.to_excel(output_path, index=False)
 
-    log("📊 통계 요약")
+    log("📊 통계 요약-SBERT")
     log(f" 매칭건수: {matched_count}건")
     log(f" 0.5 이상: {above_50_count}건")
     log(f" 0.9 이상: {above_90_count}건")

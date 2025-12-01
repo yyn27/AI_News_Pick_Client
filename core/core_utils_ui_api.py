@@ -15,6 +15,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime
 from urllib.parse import urlparse
 from difflib import SequenceMatcher
+from sentence_transformers import SentenceTransformer
 
 import sys
 def resource_path(relative_path):
@@ -412,7 +413,7 @@ def fallback_with_requests(url):
         log(f"⚠️ fallback 요청 중 예외 발생: {e} - url: {url}")
         return ""
 
-def calculate_copy_ratio(article, post):
+def calculate_tfidf_copy_ratio(article, post):
     def clean(t): return re.sub(r'\s+', ' ', re.sub(r'[^\w\s]', '', t)).strip()
     article, post = clean(article), clean(post)
     sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', article) if s.strip()]
@@ -421,14 +422,14 @@ def calculate_copy_ratio(article, post):
     scores = []
     for s in sentences:
         try:
-            v = TfidfVectorizer(tokenizer=okt.morphs).fit([s, post])
+            v = TfidfVectorizer(tokenizer=okt.morphs, token_pattern=None).fit([s, post])
             tfidf = v.transform([s, post])
             scores.append(cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0])
         except:
             continue
     return round(sum(scores)/len(scores), 3) if scores else 0.0
 
-def calculate_sequence_matcher_ratio(article, post):
+def calculate_sequencematcher_copy_ratio(article, post):
     """
     A: 블로그 (post)
     B: 원문기사 (article)
@@ -453,6 +454,39 @@ def calculate_sequence_matcher_ratio(article, post):
 
     copy_ratio = matched_length / len(article_clean)
     return round(copy_ratio, 3)
+
+# sbert
+def split_sentences_korean(text):
+    # 简单按句号、问号、感叹号分句
+    return [s.strip() for s in re.split(r"[.!?]\s*", text) if s.strip()]
+
+# batch_size: 8,16, 32(32X, 16相对于8，速度提升30%左右)
+def calculate_sbert_copy_ratio(article, post, threshold=0.7):
+    article = clean_text(article)
+    post = clean_text(post)
+
+    article_sents = split_sentences_korean(article)
+    post_sents = split_sentences_korean(post)
+
+    if not article_sents or not post_sents:
+        return 0.0
+
+    try:
+        model = get_krsbert_model()
+        art_vecs = model.encode(article_sents, batch_size=16, convert_to_numpy=True, show_progress_bar=False)
+        post_vecs = model.encode(post_sents, batch_size=16, convert_to_numpy=True, show_progress_bar=False)
+
+        hit = 0
+        for art_vec in art_vecs:
+            sims = cosine_similarity([art_vec], post_vecs)[0]
+            max_sim = sims.max()
+            if max_sim >= threshold:
+                hit += 1
+
+        return round(hit / len(article_sents), 3)
+    except Exception as e:
+        print(f"❌ 相似度计算出错: {e}")
+        return 0.0
 
 def is_excluded(url):
     return any(domain in url for domain in excluded_domains)
@@ -541,3 +575,13 @@ def search_naver_news_api(queries, index, client_id, client_secret):
             log(f"❌ API 요청 중 예외 발생: {e} - query({label}): {q}", index)
 
     return results
+
+_sbert_model = None
+def get_krsbert_model():
+    global _sbert_model
+    if _sbert_model is None:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _sbert_model = SentenceTransformer("snunlp/KR-SBERT-V40K-klueNLI-augSTS", device=device)
+        log(f"✅ KR-SBERT 모델 로딩 완료 - device: {_sbert_model.device}")
+    return _sbert_model
