@@ -237,6 +237,8 @@ selector_map = {
     "m.sports.naver.com": "div._article_content",
     "m.entertain.naver.com": "article#comp_news_article div._article_content",
     "m.edaily.co.kr": "div.article_body", # 이데일리 모바일
+    "m.newspim.com": "div#viewcontents", #뉴스핌 모바일
+    "m.segye.com": "div.viewCont", #세계일보 모바일
 
     "edaily.co.kr": "div.news_body", # 1 이데일리
     "mt.co.kr": "div#textBody", # 2 머니투데이
